@@ -3,35 +3,18 @@ import threading
 import time
 import sys
 
-###############################################################################
-#                                  TRACKER                                    #
-###############################################################################
+
 class Tracker:
-    """
-    Servidor Tracker que registra, desregistra e lista peers,
-    faz buscas (SEARCH) e agora inclui suporte a KEEPALIVE.
     
-    self.peers = {
-      peer_id: {
-         "ip": <str>,
-         "port": <int>,
-         "files": [<str>, ...],
-         "last_keepalive": <float>  # time.time() da última vez que o peer enviou KEEPALIVE
-      }
-    }
-    """
 
     def __init__(self, host="0.0.0.0", port=5000):
         self.host = host
         self.port = port
-        self.peers = {}  # dicionário para manter informações dos peers
+        self.peers = {}  
         self.lock = threading.Lock()
 
     def start(self):
-        """
-        Inicia o servidor e aguarda conexões. Também inicia a thread
-        que remove peers inativos por falta de KEEPALIVE.
-        """
+        
         server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server_sock.bind((self.host, self.port))
         server_sock.listen(5)
@@ -47,10 +30,7 @@ class Tracker:
             threading.Thread(target=self.handle_client, args=(conn, addr)).start()
 
     def remove_inactive_peers(self, timeout=60):
-        """
-        A cada 10s, verifica se algum peer ficou tempo demais sem enviar KEEPALIVE.
-        Se passar de 'timeout' segundos sem keepalive, remove o peer por inatividade.
-        """
+        
         while True:
             time.sleep(10)
             now = time.time()
@@ -60,7 +40,7 @@ class Tracker:
                     last_k = info.get("last_keepalive", None)
                     if not last_k:
                         # Se não tiver keepalive registrado, pode ser que tenha acabado de registrar
-                        # ou o peer não implementou keepalive. Decida remover ou não.
+                        # ou o peer não implementou keepalive.
                         continue
 
                     if now - last_k > timeout:
@@ -71,10 +51,7 @@ class Tracker:
                     print(f"[TRACKER] Peer '{peer_id}' removido por inatividade (KEEPALIVE).")
 
     def handle_client(self, conn, addr):
-        """
-        Recebe um comando do Peer e executa:
-          REGISTER, UNREGISTER, SEARCH, GET_PEERS, KEEPALIVE
-        """
+        
         try:
             data = conn.recv(4096).decode().strip()
             if not data:
@@ -83,7 +60,7 @@ class Tracker:
             parts = data.split()
             cmd = parts[0].upper()
 
-            # Opcional: log do comando
+
             print(f"[TRACKER] Recebeu comando: '{data}' de {addr}")
 
             if cmd == "REGISTER":
@@ -178,20 +155,8 @@ class Tracker:
         finally:
             conn.close()
 
-###############################################################################
-#                                   PEER                                      #
-###############################################################################
 class Peer:
-    """
-    Classe Peer que se registra no Tracker, envia KeepAlive periodicamente,
-    e pode executar:
-      - REGISTER
-      - UNREGISTER
-      - SEARCH <filename>
-      - GET_PEERS
-
-    A cada 30s, envia 'KEEPALIVE <peer_id>' ao Tracker.
-    """
+    
 
     def __init__(self, peer_id, tracker_ip, tracker_port, files=None):
         self.peer_id = self.format_peer_id(peer_id)
@@ -204,25 +169,18 @@ class Peer:
 
         print(f"[PEER-{self.peer_id}] IP local: {self.ip}, Porta local: {self.port}")
 
-        # (Opcional) Thread para mandar KEEPALIVE a cada 30s
         self.keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
         self.keepalive_thread.start()
 
     def format_peer_id(self, pid_str):
-        """
-        Se o usuário digitar "1", vira "PEER1".
-        Se digitar "PEER2", mantém "PEER2".
-        """
+        
         if pid_str.upper().startswith("PEER"):
             return pid_str.upper()
         else:
             return f"PEER{pid_str}"
 
     def compute_port_from_id(self, peer_id):
-        """
-        Extrai o dígito do peer_id (ex.: 'PEER2' -> 2)
-        e retorna 6000 + esse número. Se não tiver dígito, retorna 6000.
-        """
+        
         numeric_part = ''.join(filter(str.isdigit, peer_id))
         if numeric_part:
             return 6000 + int(numeric_part)
@@ -230,9 +188,7 @@ class Peer:
             return 6000
 
     def get_local_ip(self):
-        """
-        Tenta descobrir o IP local, conectando no DNS do Google (8.8.8.8).
-        """
+        
         s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         try:
             s.connect(("8.8.8.8", 80))
@@ -242,26 +198,19 @@ class Peer:
         return local_ip
 
     def _keepalive_loop(self, interval=30):
-        """
-        Thread que envia KEEPALIVE ao Tracker a cada 'interval' segundos.
-        """
+        
         while True:
             time.sleep(interval)
             self.send_keepalive()
 
     def send_keepalive(self):
-        """
-        Envia 'KEEPALIVE <peer_id>' ao Tracker. 
-        Imprime a resposta (KEEPALIVE_OK ou erro).
-        """
+        
         msg = f"KEEPALIVE {self.peer_id}"
         resp = self._send_msg_to_tracker(msg)
         print("[PEER] Resposta KEEPALIVE:", resp)
 
     def register(self):
-        """
-        Envia REGISTER <peer_id> <ip> <port> [files]
-        """
+        
         msg = f"REGISTER {self.peer_id} {self.ip} {self.port}"
         if self.files:
             files_str = ",".join(self.files)
@@ -270,17 +219,13 @@ class Peer:
         print("[PEER] Resposta REGISTER:", resp)
 
     def unregister(self):
-        """
-        Envia UNREGISTER <peer_id>
-        """
+        
         msg = f"UNREGISTER {self.peer_id}"
         resp = self._send_msg_to_tracker(msg)
         print("[PEER] Resposta UNREGISTER:", resp)
 
     def search(self, filename):
-        """
-        Envia SEARCH <filename> ao Tracker e exibe os resultados.
-        """
+        
         msg = f"SEARCH {filename}"
         resp = self._send_msg_to_tracker(msg)
         if not resp:
@@ -299,9 +244,7 @@ class Peer:
             print("[PEER] Resposta inesperada:", resp)
 
     def get_peers(self):
-        """
-        Envia GET_PEERS ao Tracker e mostra todos os peers registrados.
-        """
+        
         msg = "GET_PEERS"
         resp = self._send_msg_to_tracker(msg)
         if not resp:
@@ -316,9 +259,7 @@ class Peer:
             print("[PEER] Resposta inesperada:", resp)
 
     def _send_msg_to_tracker(self, msg):
-        """
-        Função auxiliar para enviar um comando ao Tracker e retornar a resposta.
-        """
+        
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((self.tracker_ip, self.tracker_port))
@@ -330,27 +271,14 @@ class Peer:
             print(f"[PEER] Erro ao comunicar com tracker: {e}")
             return ""
 
-###############################################################################
-#                                 FUNÇÕES MAIN                                #
-###############################################################################
+
 def run_tracker():
-    """
-    Inicia apenas o Tracker (porta 5000) e começa a remover peers inativos
-    se eles não enviarem KEEPALIVE.
-    """
+    
     tracker = Tracker(host="0.0.0.0", port=5000)
     tracker.start()
 
 def run_peer():
-    """
-    Inicia um Peer, perguntando:
-      - Peer ID
-      - Tracker IP
-      - Tracker Porta
-      - Lista de arquivos
     
-    O Peer envia KEEPALIVE a cada 30s por padrão.
-    """
     print("=== Iniciando Peer ===")
     pid = input("Digite um Peer ID (ex: 1 ou PEER1): ").strip()
     tip = input("Tracker IP (ex: 127.0.0.1): ").strip()
@@ -380,7 +308,7 @@ def run_peer():
         elif opcao == "4":
             p.get_peers()
         elif opcao == "5":
-            # Antes de sair, vamos unregister para aparecer no tracker que desconectou
+            
             p.unregister()
             print("Encerrando Peer...")
             break
@@ -388,14 +316,7 @@ def run_peer():
             print("Opção inválida. Digite 1, 2, 3, 4 ou 5.")
 
 if __name__ == "__main__":
-    """
-    Uso:
-      python myp2p.py tracker
-        -> Inicia o Tracker e aceita comandos REGISTER, UNREGISTER, SEARCH, GET_PEERS, KEEPALIVE.
-
-      python myp2p.py peer
-        -> Inicia um Peer que pode se registrar no Tracker e enviar KEEPALIVE periodicamente.
-    """
+    
     if len(sys.argv) < 2:
         print("Modo de uso:")
         print("  python myp2p.py tracker")
