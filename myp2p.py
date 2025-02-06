@@ -1,18 +1,12 @@
-import socket
-import threading
-import time
 import sys
 from tracker import Tracker
 from peer import Peer
 
-
 def run_tracker():
-    
     tracker = Tracker(host="0.0.0.0", port=5000)
     tracker.start()
 
 def run_peer():
-    
     print("=== Iniciando Peer ===")
     pid = input("Digite um Peer ID (ex: 1 ou PEER1): ").strip()
     tip = input("Tracker IP (ex: 127.0.0.1): ").strip()
@@ -31,7 +25,8 @@ def run_peer():
         print("  3 - SEARCH <filename>")
         print("  4 - GET_PEERS")
         print("  5 - CHAT <peer_ip> <peer_port>")
-        print("  6 - SAIR")
+        print("  6 - DOWNLOAD <peer_ip> <peer_port> <filename> [<num_connections>]")
+        print("  7 - SAIR")
         opcao = input("Escolha: ").strip()
 
         if opcao == "1":
@@ -49,15 +44,22 @@ def run_peer():
             message = input("Mensagem: ").strip()
             p.send_message(target_ip, target_port, message)
         elif opcao == "6":
-            
+            target_ip = input("IP do peer destino: ").strip()
+            target_port = int(input("Porta do peer destino: ").strip())
+            filename = input("Nome do arquivo a baixar: ").strip()
+            try:
+                num_conn = int(input("Número de conexões paralelas (padrão=2): ").strip())
+            except:
+                num_conn = 2
+            p.request_file(target_ip, target_port, filename, num_connections=num_conn)
+        elif opcao == "7":
             p.unregister()
             print("Encerrando Peer...")
             break
         else:
-            print("Opção inválida. Digite 1, 2, 3, 4 ou 5.")
+            print("Opção inválida.")
 
 if __name__ == "__main__":
-    
     if len(sys.argv) < 2:
         print("Modo de uso:")
         print("  python myp2p.py tracker")
