@@ -4,18 +4,11 @@ import time
 import sys
 
 class Tracker:
-    """
-    TRACKER:
-      - Mantém uma lista de peers (peer_id => {ip, port, files, last_keepalive, score}).
-      - Responde a comandos de registro, busca, etc.
-      - Remove peers inativos.
-      - Agora também mantém uma 'pontuação' (score) de cada peer.
-    """
 
     def __init__(self, host="0.0.0.0", port=5000):
         self.host = host
         self.port = port
-        self.peers = {}  # { peer_id: {"ip":..., "port":..., "files":[], "last_keepalive":..., "score":...} }
+        self.peers = {}
         self.lock = threading.Lock()
 
     def start(self):
@@ -24,7 +17,7 @@ class Tracker:
         server_sock.listen(5)
         print(f"[TRACKER] Servindo em {self.host}:{self.port}")
 
-        # Inicia a thread de remoção de inativos
+        # Inicia a thread para remover peers inativos
         t = threading.Thread(target=self.remove_inactive_peers, daemon=True)
         t.start()
 
@@ -33,9 +26,6 @@ class Tracker:
             threading.Thread(target=self.handle_client, args=(conn, addr)).start()
 
     def remove_inactive_peers(self, timeout=60):
-        """
-        Remove peers que não mandam KEEPALIVE dentro do 'timeout' (padrão: 60s).
-        """
         while True:
             time.sleep(10)
             now = time.time()
@@ -44,19 +34,14 @@ class Tracker:
                 for pid, info in self.peers.items():
                     last_k = info.get("last_keepalive", None)
                     if not last_k:
-                        # Se não tiver keepalive, pode ser que tenha acabado de registrar
                         continue
                     if now - last_k > timeout:
                         remove_list.append(pid)
-
                 for peer_id in remove_list:
                     del self.peers[peer_id]
                     print(f"[TRACKER] Peer '{peer_id}' removido por inatividade (KEEPALIVE).")
 
     def handle_client(self, conn, addr):
-        """
-        Recebe um comando do peer e responde adequadamente.
-        """
         try:
             data = conn.recv(4096).decode().strip()
             if not data:
@@ -68,36 +53,35 @@ class Tracker:
             print(f"[TRACKER] Recebeu comando: '{data}' de {addr}")
 
             if cmd == "REGISTER":
-                # REGISTER <peer_id> <ip> <port> [files]
                 if len(parts) >= 4:
                     peer_id = parts[1]
                     peer_ip = parts[2]
                     peer_port = parts[3]
-
-                    file_list = []
-                    if len(parts) == 5:
-                        file_list = parts[4].split(",") if parts[4] else []
-
+                    file_list = parts[4].split(",") if len(parts) > 4 else []
                     with self.lock:
                         if peer_id in self.peers:
-                            print(f"[TRACKER] Peer '{peer_id}' já registrado.")
-                            conn.sendall(b"ALREADY_REGISTERED\n")
+                            print(f"[TRACKER] Atualizando Peer '{peer_id}' com novos arquivos: {file_list}")
+                            if "files" not in self.peers[peer_id]:
+                                self.peers[peer_id]["files"] = []
+                            self.peers[peer_id]["files"].extend(file_list)
+                            # Remove duplicatas
+                            self.peers[peer_id]["files"] = list(set(self.peers[peer_id]["files"]))
+                            if "score" not in self.peers[peer_id]:
+                                self.peers[peer_id]["score"] = 0
                         else:
+                            print(f"[TRACKER] Registrando novo Peer '{peer_id}' com arquivos: {file_list}")
                             self.peers[peer_id] = {
                                 "ip": peer_ip,
                                 "port": int(peer_port),
                                 "files": file_list,
                                 "last_keepalive": time.time(),
-                                "score": 0  # Inicializa o score
+                                "score": 0
                             }
-                            print(f"[TRACKER] Peer '{peer_id}' registrado em {peer_ip}:{peer_port}. "
-                                  f"Arquivos: {file_list}")
-                            conn.sendall(b"REGISTER_OK\n")
+                    conn.sendall(b"REGISTER_OK\n")
                 else:
                     conn.sendall(b"ERROR Uso: REGISTER <peer_id> <ip> <port> [files]\n")
 
             elif cmd == "UNREGISTER":
-                # UNREGISTER <peer_id>
                 if len(parts) == 2:
                     peer_id = parts[1]
                     with self.lock:
@@ -111,7 +95,6 @@ class Tracker:
                     conn.sendall(b"ERROR Uso: UNREGISTER <peer_id>\n")
 
             elif cmd == "SEARCH":
-                # SEARCH <filename>
                 if len(parts) == 2:
                     filename = parts[1]
                     result = []
@@ -119,7 +102,6 @@ class Tracker:
                         for pid, info in self.peers.items():
                             if filename in info["files"]:
                                 result.append((pid, info["ip"], info["port"]))
-
                     if result:
                         resp = f"SEARCH_RESULT {len(result)}\n"
                         for (pid, ip, port) in result:
@@ -131,7 +113,6 @@ class Tracker:
                     conn.sendall(b"ERROR Uso: SEARCH <filename>\n")
 
             elif cmd == "GET_PEERS":
-                # GET_PEERS
                 with self.lock:
                     resp = f"PEER_LIST {len(self.peers)}\n"
                     for pid, info in self.peers.items():
@@ -139,7 +120,6 @@ class Tracker:
                 conn.sendall(resp.encode())
 
             elif cmd == "KEEPALIVE":
-                # KEEPALIVE <peer_id>
                 if len(parts) == 2:
                     peer_id = parts[1]
                     with self.lock:
@@ -153,7 +133,6 @@ class Tracker:
                     conn.sendall(b"ERROR Uso: KEEPALIVE <peer_id>\n")
 
             elif cmd == "INCREMENT_SCORE":
-                # INCREMENT_SCORE <peer_id> <delta>
                 if len(parts) == 3:
                     peer_id = parts[1]
                     delta = int(parts[2])
@@ -169,8 +148,20 @@ class Tracker:
 
             else:
                 conn.sendall(b"ERROR Comando desconhecido\n")
-
         except Exception as e:
             print(f"[TRACKER] Erro ao processar comando: {e}")
         finally:
             conn.close()
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Modo de uso:")
+        print("  python tracker.py tracker")
+        sys.exit(0)
+
+    mode = sys.argv[1].lower()
+    if mode == "tracker":
+        tracker = Tracker(host="0.0.0.0", port=5000)
+        tracker.start()
+    else:
+        print("Modo inválido. Use 'tracker'.")

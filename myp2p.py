@@ -22,10 +22,10 @@ def run_peer():
         print("\nComandos disponíveis:")
         print("  1 - REGISTER")
         print("  2 - UNREGISTER")
-        print("  3 - SEARCH <filename>")
+        print("  3 - SEARCH")
         print("  4 - GET_PEERS")
-        print("  5 - CHAT <peer_ip> <peer_port>")
-        print("  6 - DOWNLOAD <peer_ip> <peer_port> <filename> [<num_connections>]")
+        print("  5 - CHAT")
+        print("  6 - DOWNLOAD")
         print("  7 - SAIR")
         opcao = input("Escolha: ").strip()
 

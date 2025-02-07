@@ -4,16 +4,7 @@ import time
 import os
 
 class Peer:
-    """
-    PEER:
-      - Registra-se no tracker, envia KEEPALIVE periodicamente.
-      - Compartilha lista de arquivos.
-      - Responde a mensagens de chat.
-      - Agora também responde a pedidos de arquivo (DOWNLOAD).
-      - E oferece método para pedir arquivos a outros peers usando múltiplas conexões.
-      - Sempre que faz upload, avisa o tracker para incrementar o score.
-    """
-
+    
     def __init__(self, peer_id, tracker_ip, tracker_port, files=None):
         self.peer_id = self.format_peer_id(peer_id)
         self.tracker_ip = tracker_ip
@@ -25,7 +16,7 @@ class Peer:
 
         print(f"[PEER-{self.peer_id}] IP local: {self.ip}, Porta local: {self.port}")
         
-        # Thread para keepalive
+        # Inicia thread para o keepalive
         self.keepalive_thread = threading.Thread(target=self._keepalive_loop, daemon=True)
         self.keepalive_thread.start()
 
@@ -62,6 +53,7 @@ class Peer:
         # print("[PEER] Resposta KEEPALIVE:", resp)
 
     def register(self):
+        print(f"[PEER] Registrando com arquivos: {self.files}")
         msg = f"REGISTER {self.peer_id} {self.ip} {self.port}"
         if self.files:
             files_str = ",".join(self.files)
@@ -107,7 +99,7 @@ class Peer:
             print("[PEER] Resposta inesperada:", resp)
 
     def start_lister(self):
-        """Inicia um servidor para receber mensagens de outros peers (chat ou pedido de arquivo)."""
+        """Inicia um servidor para receber mensagens de outros peers (chat ou pedidos de arquivo)."""
         listener = threading.Thread(target=self._listen_for_messages, daemon=True)
         listener.start()
 
@@ -122,22 +114,15 @@ class Peer:
             threading.Thread(target=self._handle_peer_message, args=(conn, addr)).start()
 
     def _handle_peer_message(self, conn, addr):
-        """
-        Processa mensagens recebidas de outro peer:
-          - Mensagens de chat
-          - Solicitação FILE_SIZE
-          - Solicitação DOWNLOAD (bloco de um arquivo)
-        """
         try:
             msg = conn.recv(4096).decode().strip()
             if not msg:
                 return
 
-            # Vamos analisar a 1a palavra (comando).
             parts = msg.split()
             cmd = parts[0].upper()
 
-            if cmd == "CHAT":  # Exemplo de mensagem de chat
+            if cmd == "CHAT":
                 # Formato: CHAT <mensagem>
                 mensagem = " ".join(parts[1:])
                 print(f"[CHAT] Mensagem recebida de {addr}: {mensagem}")
@@ -161,14 +146,12 @@ class Peer:
                     conn.sendall(b"ERROR Uso: DOWNLOAD <filename> <start> <end>\n")
 
             else:
-                # Se não reconhece, consideramos como mensagem de chat normal
                 print(f"[CHAT] Mensagem (desconhecida) de {addr}: {msg}")
 
         finally:
             conn.close()
 
     def send_message(self, target_ip, target_port, message):
-        """Envia uma mensagem de chat para outro peer."""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.connect((target_ip, target_port))
@@ -182,7 +165,7 @@ class Peer:
         download_dir = "downloads"
         if not os.path.exists(download_dir):
             os.makedirs(download_dir)
-        # 1) Obter tamanho do arquivo
+       
         file_size = self._get_file_size(target_ip, target_port, filename)
         if file_size <= 0:
             print(f"[DOWNLOAD] Arquivo '{filename}' não encontrado ou erro no peer.")
@@ -190,22 +173,18 @@ class Peer:
 
         print(f"[DOWNLOAD] Tamanho do arquivo '{filename}': {file_size} bytes. Iniciando download em {num_connections} conexões...")
 
-        # Nome do arquivo que vamos salvar localmente
+        # Nome do arquivo para salvar localmente
         local_filename = os.path.join(download_dir, filename)
 
-        # Cria um buffer (array de bytes) na memória ou utiliza um arquivo aberto para escrita
-        # Vamos direto usar um arquivo e posicionar com seek() para escrever no lugar certo
+        # Cria o arquivo com o tamanho correto
         with open(local_filename, "wb") as f:
-            f.truncate(file_size)  # Garante tamanho
+            f.truncate(file_size)
 
-        # 2) Dividir em blocos e criar threads
         chunk_size = file_size // num_connections
         threads = []
         for i in range(num_connections):
             start = i * chunk_size
-            # Último chunk vai até o final
-            end = (file_size if i == num_connections - 1 else (start + chunk_size))
-
+            end = file_size if i == num_connections - 1 else (start + chunk_size)
             t = threading.Thread(
                 target=self._download_chunk,
                 args=(target_ip, target_port, filename, start, end, local_filename, i)
@@ -218,9 +197,12 @@ class Peer:
 
         print(f"[DOWNLOAD] Download de '{filename}' concluído. Salvo em '{local_filename}'.")
 
-    def _download_chunk(self, target_ip, target_port, filename, start, end, local_filename, idx):
+        if filename not in self.files:
+            self.files.append(filename)
+            print(f"[DOWNLOAD] Arquivo '{filename}' adicionado à lista de arquivos compartilhados.")
+            self.register()
 
-        
+    def _download_chunk(self, target_ip, target_port, filename, start, end, local_filename, idx):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.connect((target_ip, target_port))
@@ -237,7 +219,6 @@ class Peer:
                     data_chunks.append(chunk)
                     received += len(chunk)
 
-            # Escreve o bloco na posição correta dentro do arquivo na pasta de downloads
             with open(local_filename, "rb+") as f:
                 f.seek(start)
                 f.write(b"".join(data_chunks))
@@ -247,18 +228,13 @@ class Peer:
             print(f"[DOWNLOAD] Erro ao baixar chunk #{idx} do arquivo '{filename}': {e}")
 
     def _get_file_size(self, target_ip, target_port, filename):
-        """
-        Faz a requisição FILE_SIZE <filename> e aguarda resposta do peer: "FILE_SIZE_OK <size>".
-        """
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
                 sock.connect((target_ip, target_port))
                 cmd = f"FILE_SIZE {filename}"
                 sock.sendall(cmd.encode())
-
                 resp = sock.recv(1024).decode().strip()
                 if resp.startswith("FILE_SIZE_OK"):
-                    # FILE_SIZE_OK <size>
                     parts = resp.split()
                     size = int(parts[1])
                     return size
@@ -270,62 +246,56 @@ class Peer:
             return -1
 
     def _handle_file_size_request(self, conn, filename):
-        """
-        Envia o tamanho do arquivo (se existir localmente).
-        """
-        if filename in self.files and os.path.exists(filename):
-            size = os.path.getsize(filename)
+        # Procura o arquivo na pasta atual ou na pasta 'downloads'
+        file_path = None
+        if filename in self.files:
+            if os.path.exists(filename):
+                file_path = filename
+            elif os.path.exists(os.path.join("downloads", filename)):
+                file_path = os.path.join("downloads", filename)
+
+        if file_path:
+            size = os.path.getsize(file_path)
             resp = f"FILE_SIZE_OK {size}\n"
             conn.sendall(resp.encode())
         else:
-            # Arquivo não encontrado ou não compartilhado
             conn.sendall(b"ERROR FILE NOT FOUND\n")
 
     def _handle_file_download_request(self, conn, filename, start, end):
-        """
-        Envia o conteúdo do arquivo (ou bloco) do disco para o peer solicitante.
-        Também podemos aplicar aqui qualquer limitação de banda ou lógica de incentivo.
-        """
-        if filename in self.files and os.path.exists(filename):
-            file_size = os.path.getsize(filename)
-            if start < 0: start = 0
-            if end > file_size: end = file_size
+        # Procura o arquivo na pasta atual ou na pasta 'downloads'
+        file_path = None
+        if filename in self.files:
+            if os.path.exists(filename):
+                file_path = filename
+            elif os.path.exists(os.path.join("downloads", filename)):
+                file_path = os.path.join("downloads", filename)
+
+        if file_path:
+            file_size = os.path.getsize(file_path)
+            if start < 0:
+                start = 0
+            if end > file_size:
+                end = file_size
 
             length = end - start
             if length <= 0:
-                conn.sendall(b"")  # Nada para mandar
+                conn.sendall(b"")
                 return
 
-            # LEITURA DO BLOCO
-            with open(filename, "rb") as f:
+            with open(file_path, "rb") as f:
                 f.seek(start)
                 data = f.read(length)
-
-            # (Opcional) Exemplo de limitação de taxa:
-            # Se quisermos "punir" peers com baixo score, poderíamos fazer:
-            #   time.sleep(algum_calculo_baseado_no_score)
-            # Mas aqui faremos algo simples (sem delay).
-
-            # Envia o bloco de dados
             conn.sendall(data)
 
-            # Agora, incrementamos nosso score no Tracker, pois fizemos um upload.
-            # Aqui, consideramos a quantidade de bytes "length" para pontuar.
             self._increment_score(length)
-
         else:
             conn.sendall(b"ERROR FILE NOT FOUND\n")
 
     def _increment_score(self, delta):
-        """
-        Envia comando INCREMENT_SCORE <peer_id> <delta> para o tracker,
-        de modo a aumentar nossa 'reputação' ou 'pontuação'.
-        """
         msg = f"INCREMENT_SCORE {self.peer_id} {delta}"
         _ = self._send_msg_to_tracker(msg)
 
     def _send_msg_to_tracker(self, msg):
-        """Encapsula o envio de mensagens ao tracker."""
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             sock.connect((self.tracker_ip, self.tracker_port))
